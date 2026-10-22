@@ -16,7 +16,6 @@
 //   [TEST] RESULT id=T01 status=PASS|FAIL|SKIP name=<name> detail=<text>
 //   [TEST] HUMAN id=H01 prompt=<text>
 //   [TEST] DONE total=N pass=P fail=F skip=S
-//   [TEST] IDLE            (printed every 2 s while waiting; send 'r' to dump results)
 #pragma once
 #include <Arduino.h>
 #include "test_config.h"
@@ -134,18 +133,16 @@ inline void TEST_DUMP() {
   }
 }
 
-// Call from loop(): dumps stored results when host sent 'r'; prints IDLE heartbeat otherwise.
+// Call from loop(): dumps stored results when host sent 'r'.
+// Purely reactive: only transmits over serial when explicitly requested by host ('r').
+// Never sends unsolicited prints, preventing USB CDC buffer overflow and blocking
+// hangs across all microcontroller architectures without any platform-specific code.
 inline void TEST_SERVICE() {
-  static unsigned long last = 0;
   while (Serial.available()) {
     if (Serial.read() == 'r') {
       TEST_DUMP();
       return;
     }
-  }
-  if (millis() - last > 2000) {
-    last = millis();
-    Serial.println("[TEST] IDLE");
   }
 }
 
