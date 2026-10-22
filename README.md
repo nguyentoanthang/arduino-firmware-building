@@ -18,8 +18,8 @@ The skill is completely **board-agnostic**: it makes no hardcoded assumptions ab
 - **Interactive Board & FQBN Search**: Automatically discovers board names, Platform IDs, and exact FQBNs using `arduino-cli board search <name>`.
 - **Comprehensive Plan for Human Review**: Generates detailed `PLAN.md` with full project directory trees, per-file API breakdowns, and Mermaid architecture diagrams before any code is written.
 - **Human-in-the-Loop Review Gate**: Halts at the end of planning for human review and approval before touching code.
-- **Embedded Self-Test Framework**: Lightweight C++11 test harness (`test_harness.h`) that runs automated tests (`T##`) at boot, stores structured records in static RAM, and dumps them on host request (`r`).
-- **Clean Source-Level Configuration**: Test mode is controlled via `test_config.h` (`#define TEST_MODE 1`); production builds compile with zero test overhead and without breaking board-specific compiler flags.
+- **Firmware Built with Embedded Tests**: The firmware is built with self-tests embedded directly in the binary (`test_harness.h` & `tests.cpp`), executing automated checks (`T##`) at boot, storing structured records in static RAM, and dumping them on host request (`r`).
+- **Controlled via `TEST_MODE`**: The embedded test framework is controlled at the source level via `test_config.h` (`#define TEST_MODE 1`). For production builds, disabling `TEST_MODE` strips out all test code with zero flash or RAM overhead, without modifying board-specific compiler flags.
 - **Universal Reset Protocol**: Always instructs the user to reset the board after flashing, guaranteeing firmware boots cleanly across both auto-reset and native USB bootloader boards.
 - **Automated Serial Log Parsing**: `capture_serial.py` and `parse_results.py` stream test output and evaluate pass/fail criteria and crash detection automatically.
 - **Autonomous Fix Loop**: Automatically diagnoses test failures from serial logs and applies code fixes (up to 3 iterations).
