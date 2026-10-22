@@ -128,7 +128,7 @@ arduino-firmware-building/
      arduino-cli core update-index
      ```
      The skill's Phase 0 search will discover the FQBN and install the core automatically.
-  2. **If using a custom PCB with a generic chip:** Specify the base chip's FQBN (e.g. `arduino-cli core install esp32:esp32`) and provide the pin mapping in `docs/board.md`. The skill will generate `config.h` matching the custom wiring.
+  2. **If using a custom PCB with a generic chip:** Specify the base chip's FQBN (e.g. `esp32:esp32:esp32s3`, `rp2040:rp2040:generic`) and install its core (e.g. `arduino-cli core install esp32:esp32`). Provide the pin mapping in `docs/board.md`. The skill will generate `config.h` matching the custom wiring.
 
 ---
 
@@ -147,7 +147,11 @@ my_project/
 
 ### 2. Setup & Invocation
 
-Place this repository in your project or your AI tool's global skills folder:
+Clone or place this repository in your project or your AI tool's global skills folder:
+
+```bash
+git clone https://github.com/nguyentoanthang/arduino-firmware-building.git <skills_folder>/arduino-firmware-building
+```
 
 | Tool | Project-Level Folder | Global (User-Level) Folder |
 | :--- | :--- | :--- |
