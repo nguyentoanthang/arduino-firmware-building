@@ -23,7 +23,7 @@
 #ifdef TEST_MODE
 
 #ifndef TEST_MAX_RECORDS
-#define TEST_MAX_RECORDS 12
+#define TEST_MAX_RECORDS 24
 #endif
 #ifndef TEST_TEXT_LEN
 #define TEST_TEXT_LEN 48
@@ -147,6 +147,23 @@ inline void TEST_SERVICE() {
 }
 
 #define TEST_ASSERT(id, name, cond, detail) TEST_REPORT(id, name, (cond), (detail))
+#define TEST_ASSERT_TRUE(id, name, cond) \
+  TEST_REPORT(id, name, (cond), (cond) ? "true" : "expected true")
+#define TEST_ASSERT_FALSE(id, name, cond) \
+  TEST_REPORT(id, name, !(cond), !(cond) ? "false" : "expected false")
+#define TEST_ASSERT_EQ(id, name, actual, expected) \
+  TEST_REPORT(id, name, ((actual) == (expected)), \
+              String("act=") + (actual) + " exp=" + (expected))
+#define TEST_ASSERT_NE(id, name, actual, unexpected) \
+  TEST_REPORT(id, name, ((actual) != (unexpected)), \
+              String("act=") + (actual) + " not expected")
+#define TEST_ASSERT_RANGE(id, name, val, min_val, max_val) \
+  TEST_REPORT(id, name, ((val) >= (min_val) && (val) <= (max_val)), \
+              String("val=") + (val) + " range=[" + (min_val) + "," + (max_val) + "]")
+#define TEST_ASSERT_NULL(id, name, ptr) \
+  TEST_REPORT(id, name, ((ptr) == NULL), ((ptr) == NULL) ? "null" : "expected null")
+#define TEST_ASSERT_NOT_NULL(id, name, ptr) \
+  TEST_REPORT(id, name, ((ptr) != NULL), ((ptr) != NULL) ? "valid ptr" : "expected not null")
 
 #else  // production build: everything compiles away
 inline void TEST_START(const char*, const char*) {}
@@ -157,4 +174,11 @@ inline void TEST_DONE() {}
 inline void TEST_DUMP() {}
 inline void TEST_SERVICE() {}
 #define TEST_ASSERT(id, name, cond, detail) ((void)0)
+#define TEST_ASSERT_TRUE(id, name, cond) ((void)0)
+#define TEST_ASSERT_FALSE(id, name, cond) ((void)0)
+#define TEST_ASSERT_EQ(id, name, actual, expected) ((void)0)
+#define TEST_ASSERT_NE(id, name, actual, unexpected) ((void)0)
+#define TEST_ASSERT_RANGE(id, name, val, min_val, max_val) ((void)0)
+#define TEST_ASSERT_NULL(id, name, ptr) ((void)0)
+#define TEST_ASSERT_NOT_NULL(id, name, ptr) ((void)0)
 #endif

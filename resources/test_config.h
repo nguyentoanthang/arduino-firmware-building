@@ -7,7 +7,10 @@
 #pragma once
 #define TEST_MODE 1
 
-// Optional: size of the in-RAM result store (see test_harness.h). Defaults are small; raise
-// them if you have many tests, lower them on boards with very little RAM.
-// #define TEST_MAX_RECORDS 12   // max number of T##/H## entries
+// Optional: size of the in-RAM result store (see test_harness.h).
+// Ensure TEST_MAX_RECORDS is at least equal to the total automated (T##) and human (H##) tests.
+// - Default in test_harness.h: 24 records.
+// - Modern MCUs (ESP32, RP2040, STM32, SAMD): can easily use 32, 48, or more.
+// - RAM-constrained MCUs (ATmega328P / 2KB RAM): keep around 12-16 and TEST_TEXT_LEN at 32.
+// #define TEST_MAX_RECORDS 24   // max number of T##/H## entries
 // #define TEST_TEXT_LEN 48      // max chars kept for each detail/prompt text

@@ -84,23 +84,48 @@ flowchart TD
     HARNESS <-->|Serial UART / CDC| HOST
 ```
 
-## 7. Test Strategy & Verification
-- **Test Mode Toggle:** Activated via `#define TEST_MODE 1` in `test_config.h`.
-- **Boot Execution:** Self-tests run once during `setup()`, caching structured results into static RAM (`TestRecord`).
-- **On-Demand Serial Dump:** `TEST_SERVICE()` listens in `loop()` for `'r'` character sent by `capture_serial.py --send r` and streams `[TEST]` records.
-- **Automated Tests:** Mapped to IDs `T01`, `T02`, ... in `TESTS.md`.
-- **Human Verification:** Mapped to IDs `H01`, `H02`, ... in `TESTS.md`.
+## 7. Test Strategy & Edge-Case Verification
+
+### 7.1 Architecture & Control
+- **Test Mode Toggle:** Activated via `#define TEST_MODE 1` in `test_config.h`. Production builds disable `TEST_MODE` to strip all test code with zero overhead.
+- **Boot Execution:** Self-tests run once during `setup()`, storing structured records in static RAM (`TestRecord`).
+- **On-Demand Serial Dump:** `TEST_SERVICE()` listens in `loop()` for `'r'` character sent by `capture_serial.py --send r` and streams `[TEST]` records without unsolicited blocking prints.
+- **Harness Capacity:** Configure `TEST_MAX_RECORDS` in `test_config.h` to match or exceed the total planned test count (`T##` + `H##`).
+
+### 7.2 Multi-Category Test Matrix
+> [!IMPORTANT]
+> Basic happy-path tests are easy to pass and mask critical bugs. All requirements must include rigorous edge-case and failure-mode checks across the following categories:
+> 1. **Nominal (`NOM`):** Standard operational checks with typical valid parameters.
+> 2. **Boundary & Extremes (`BND`):** Min/max limits, zero values, integer overflow, buffer limits, string truncation.
+> 3. **Negative & Invalid Input (`NEG`):** `NULL` pointers, out-of-range parameters, invalid commands (graceful error return without crashing).
+> 4. **Fault Simulation & Resilience (`FLT`):** Communication timeouts, disconnected sensor / I2C NACK fallback, non-blocking execution (no infinite `while` loops).
+> 5. **State Machine Lifecycle (`STA`):** Re-initialization idempotency, uninitialized calls, state recovery.
+> 6. **Timing & Asynchrony (`TIM`):** Rapid pulse chatter, debounce boundaries, `millis()` wraparound safety.
+> 7. **Human Edge-Case Verification (`HUM`):** Display boundary rendering with maximum length strings, visual fault alert indicators on error.
+
+### 7.3 Edge Case & Failure Mode Mapping
+| Failure Mode / Edge Case | Risk Level | Mitigation & Firmware Handling | Test ID | Type |
+|---|---|---|---|---|
+| Sensor / Peripheral Disconnect | High | Non-blocking timeout (`millis()`); returns error status without hanging | `T07` | auto |
+| Buffer Overrun on Long Input | High | Explicit length clamping (`BUF_SIZE - 1`) and null termination | `T04` | auto |
+| Out-of-Range Parameter / Sensor Glitch | Medium | Clamped to safe min/max bounds | `T02`, `T03` | auto |
+| NULL Pointer passed to API | High | Parameter validation at function entry returning error code | `T05` | auto |
+| Invalid Command / Enum | Medium | Rejection with error status; state preserved | `T06` | auto |
+| Double `begin()` or Early Call | Medium | Guarded by `is_initialized` state flags | `T08`, `T09` | auto |
+| Rapid Switch Chatter / Bouncing | Medium | Time-based debounce window rejects short pulses | `T10` | auto |
+| Max String Length on Display | Medium | UI buffer truncation to prevent visual clipping or heap corruption | `H02` | human |
 
 ## 8. Work Packages (Implementation Steps)
 1. **WP1: Project Setup & Harness Configuration**
    - Copy `test_config.h`, `test_harness.h`, `tests.h`, `tests.cpp` into sketch directory.
-   - Configure memory bounds and verify baud rate.
+   - Configure memory bounds (`TEST_MAX_RECORDS`) and baud rate in `test_config.h`.
 2. **WP2: Core Hardware & Configuration Module**
    - Implement `config.h` with pins mapped from documentation.
-3. **WP3: Feature Modules Implementation**
+3. **WP3: Feature Modules Implementation (Defensive Embedded Design)**
    - Implement `<module1>.h/.cpp` and `<module2>.h/.cpp` using documented APIs.
-4. **WP4: Self-Test Implementation**
-   - Implement test cases in `tests.cpp` for each `T##` test ID.
+   - Apply defensive guards: NULL pointer checks, non-blocking timeouts with `millis()`, buffer bounds clamping.
+4. **WP4: Comprehensive Self-Test Implementation**
+   - Implement test cases in `tests.cpp` covering nominal checks, boundary limits, negative inputs, fault resilience, state transitions, and timing edge cases.
 5. **WP5: Main Sketch Integration & Compilation**
    - Wire modules and harness into `<sketch>.ino`.
    - Compile cleanly with `arduino-cli compile -b <FQBN>[:options] <sketch>`.
