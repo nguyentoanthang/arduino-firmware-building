@@ -5,7 +5,8 @@ description: >-
   Arduino-compatible board end to end with arduino-cli: identifies the board and FQBN via
   cli search, requires user-provided board/library documentation, validates requirements,
   writes plan and comprehensive test spec (including edge cases, boundary limits, negative
-  inputs, and fault resilience), stops for user review & approval, implements and compiles via
+  inputs, and fault resilience), stops for user review & approval, implements functional code
+  and test cases via two parallel subagents followed by a third integration & compilation
   subagent, uploads with user-assisted bootloader/reset steps, captures serial test logs,
   fixes failures (max 3 loops) and coordinates human-only tests.
 ---
@@ -36,19 +37,28 @@ The skill requires an input documentation folder containing board and library sp
 - Once located, list the files, read markdown docs fully and source/header files selectively (headers, examples, grep for needed symbols). Build a short capability summary: board facts, available libraries and APIs, known limits.
 - If the documented libraries are not installed, install them using `arduino-cli lib install <library_name>`.
 
-### 1b. Requirements
-Take the user's requirement and **validate it against the docs**: is every needed feature supported by the board and the documented libraries? List unsupported or undocumented items explicitly and propose options (different approach, other library, ask user to add docs). **Ask about every unclear point** (behavior, hardware, connectivity, memory, power, timing, what counts as success). Proactively probe for edge cases, boundary limits, potential failure modes (e.g. disconnected sensors, communication dropouts, buffer limits, power glitches), and recovery expectations. Ask how the firmware should respond when inputs are out of bounds or hardware does not respond. Repeat until nothing is ambiguous. Summarize the confirmed requirements and get approval.
+### 1b. Requirements & POST Consultation
+Take the user's requirement and **validate it against the docs**: is every needed feature supported by the board and the documented libraries? List unsupported or undocumented items explicitly and propose options (different approach, other library, ask user to add docs). **Ask about every unclear point** (behavior, hardware, connectivity, memory, power, timing, what counts as success). Proactively probe for edge cases, boundary limits, potential failure modes (e.g. disconnected sensors, communication dropouts, buffer limits, power glitches), and recovery expectations. Ask how the firmware should respond when inputs are out of bounds or hardware does not respond.
+
+- **Power-On Self-Test (POST) Consultation:**
+  Always explain POST to the user and consult on its usage for the project:
+  1. **Explain what POST is and does:** A permanent embedded hardware health check (`post.h`/`post.cpp`) that executes once in `setup()` at boot/reset. Unlike the test harness (which is stripped in production when `TEST_MODE=0`), POST stays in production firmware to verify physical bus integrity (e.g. I2C/SPI ACK), device presence (`WHO_AM_I` registers), and power rails before the main loop runs. If hardware is dead or disconnected, it triggers a safe state or fault alert (e.g. LED blink code, display banner, serial diagnostic) instead of letting `loop()` run blindly on corrupt data.
+  2. **Ask the user for their preference:** Ask whether they want POST enabled (ON), disabled (OFF), or prefer a different/custom approach (e.g., non-blocking degraded mode, custom fault indication like buzzer/OLED vs. LED, or selective peripheral checks).
+  3. **Record the decision:** Tailor `PLAN.md` and `TESTS.md` accordingly (including or omitting `post.h/.cpp` and adjusting `T01` based on the user's explicit choice).
+
+Repeat until nothing is ambiguous. Summarize the confirmed requirements (including the POST decision) and get approval.
 
 ## Phase 2: Plan and test spec
 Create from templates in [resources/](./resources/):
 - `PLAN.md` ([template](./resources/PLAN.template.md)): Must be sufficiently detailed for thorough human review and sign-off. Must include:
   1. **Project directory structure:** ASCII tree diagram showing all planned sketch files, headers, test harness files, and log directories.
-  2. **Source file breakdown:** Explicitly detail each file's purpose, public APIs/functions, responsibilities, and dependencies.
+  2. **Source file breakdown:** Explicitly detail each file's purpose, exact public APIs/function signatures/return types, responsibilities, and dependencies (this serves as the strict contract between the functional code subagent and the test case subagent).
   3. **Architecture diagram (Mermaid):** Visual diagram showing module interactions, hardware/peripheral connections, third-party libraries, and test harness integration. **Mermaid syntax rules to prevent parse errors:** Always enclose node labels containing parentheses, brackets, or special characters in double quotes (e.g. `NODE["Label (info)"]`). Never use unquoted parentheses, brackets, or quotes inside edge labels `|...|` (e.g. `-->|M5.update()|` fails with `got 'PS'`); edge labels must either omit parentheses (e.g. `-->|Calls update|`) or be enclosed in double quotes (e.g. `-->|"M5.update()"|`).
   4. **Target board configuration:** Resolved `<FQBN>[:options]` (inspect options via `arduino-cli board details -b <FQBN>`), serial baud rate, and upload/reset procedures.
-  5. **Work packages:** Clear, ordered task breakdown for the implementation agent.
+  5. **Work packages:** Clear, ordered task breakdown organized across the 3 implementation subagents (Functional Source, Test Cases, Integration & Compilation).
   6. **Test Strategy & Edge-Case Verification:** Explicitly map failure modes, boundary conditions, and hardware edge cases to specific test IDs.
 - `TESTS.md` ([template](./resources/TESTS.template.md)): **Strict requirement: Never specify only basic happy-path tests.** Basic tests easily pass while masking critical firmware bugs. Every requirement must be accompanied by edge-case and negative tests across mandatory categories:
+  - **Hardware Power-On Self-Test (`PST`):** Permanent production checks verifying physical bus integrity, device presence, `WHO_AM_I` / chip IDs, and power rails at boot (`T01`).
   - **Nominal / Functional (`NOM`):** Standard operational checks with expected valid parameters.
   - **Boundary & Extremes (`BND`):** Min/max limits, zero/empty values, buffer limits, string truncation, and overflow handling.
   - **Negative & Invalid Input (`NEG`):** `NULL` pointers, out-of-range parameters, invalid commands (graceful error return without crashing).
@@ -57,7 +67,9 @@ Create from templates in [resources/](./resources/):
   - **Timing & Asynchrony (`TIM`):** Rapid pulse chatter, debounce boundaries, `millis()` wraparound safety.
   - **Human Edge Cases (`HUM`):** Display boundary rendering with maximum length strings, visual fault alert indicators on error.
   Mark each test `auto` (verifiable from the serial log) or `human` (visual/audio/physical). Make as many tests auto as possible.
-- Firmware must be **designed for testing**: copy [test_config.h](./resources/test_config.h), [test_harness.h](./resources/test_harness.h), [tests.h](./resources/tests.h) and [tests.cpp](./resources/tests.cpp) (template) into the sketch; self-tests run once at boot under `TEST_MODE`, store their results in global variables, and the firmware dumps them over serial when the host sends `r`. Production code stays free of test code. `TEST_MODE` is defined in `test_config.h` (source, not a compiler flag), so every file must include `test_config.h` (directly or via `tests.h`/`test_harness.h`) before testing `#ifdef TEST_MODE`. Configure `TEST_MAX_RECORDS` in `test_config.h` to match or exceed total planned `T##` + `H##` tests so no test results are dropped. The log format is fixed (see harness header); never invent other formats. Debug prints may exist but only `[TEST]` lines are judged.
+- Firmware must be **designed for production hardware health and automated testing**:
+  1. **Permanent Hardware Power-On Self-Test (POST):** Copy [post.h](./resources/post.h) and [post.cpp](./resources/post.cpp) into the sketch. POST runs once in `setup()` every time the hardware is powered on or reset, checking physical bus ACK, sensor ID (`WHO_AM_I`), and storage/peripheral readiness. **POST remains permanently in production code** (independent of `TEST_MODE`) to guarantee hardware integrity and provide safe fallback/fault indication if hardware is dead or disconnected.
+  2. **Automated Verification Harness (`TEST_MODE`):** Copy [test_config.h](./resources/test_config.h), [test_harness.h](./resources/test_harness.h), [tests.h](./resources/tests.h) and [tests.cpp](./resources/tests.cpp) into the sketch; self-tests run once at boot under `TEST_MODE`, assert POST result (`post_get_result().all_passed`), execute edge cases, store records in static RAM, and dump them over serial on host request `r`. Production code stays free of test harness code by disabling `TEST_MODE` in `test_config.h`. Configure `TEST_MAX_RECORDS` in `test_config.h` to match or exceed total planned `T##` + `H##` tests so no test results are dropped. The log format is fixed (see harness header); never invent other formats. Debug prints may exist but only `[TEST]` lines are judged.
 
 ### Checkpoint: Review and Approval (STOP)
 At the end of Phase 2, **stop and present `PLAN.md` and `TESTS.md` to the user for review**. Do not proceed to implementation yet.
@@ -66,12 +78,32 @@ At the end of Phase 2, **stop and present `PLAN.md` and `TESTS.md` to the user f
 - If the user provides feedback or requests revisions: update `PLAN.md` and/or `TESTS.md` accordingly, summarize the revisions, and wait for confirmation.
 - Only proceed to Phase 3 once the user explicitly approves the plan and test spec.
 
-## Phase 3: Implementation & Compilation (subagent)
-Delegate implementation and compilation to a subagent with: PLAN.md, TESTS.md, the harness files, the relevant doc files, and the following rules:
-1. **Implement:** Implement exactly according to PLAN.md and TESTS.md. Use only APIs found in the docs (or verified in library headers). Apply defensive embedded programming: guard against `NULL` pointers, clamp inputs to boundary ranges, and use non-blocking timeouts with `millis()` rather than bare `while()` loops on hardware registers or communication buses. Every test ID in TESTS.md (both nominal and edge-case) must be reported through the harness in `tests.cpp`. Do not upload or touch hardware.
-2. **Compile:** Compile using `arduino-cli compile -b <FQBN>[:options] <sketch>` with the resolved `<FQBN>[:options]` from Phase 2. `TEST_MODE` is enabled by `#define TEST_MODE 1` in the sketch's `test_config.h`, not by a compiler flag, so the build command is identical across all boards.
-3. **Iterate to clean compile:** If compilation fails, fix source errors and recompile. Implementation is complete **only when the sketch compiles with zero errors under `TEST_MODE`**.
-*(If subagents are unavailable, implement and compile inline. Fix compile errors iteratively; compile fixes do not count as test loops, but stop and ask the user if compile fails 10 consecutive times.)* Review the result against the plan.
+## Phase 3: Implementation, Integration & Compilation (3-Subagent Pipeline)
+Divide implementation, integration, and compilation into three specialized subagents. Spawn **Subagent 1** and **Subagent 2** first (in parallel), wait for **both** to complete, and then spawn **Subagent 3**:
+
+1. **Subagent 1 — Functional Source Code Implementer:**
+   - **Inputs:** `PLAN.md`, template POST files ([post.h](./resources/post.h), [post.cpp](./resources/post.cpp)), and relevant board and library documentation.
+   - **Scope (exclusive ownership of functional files):** Implement `config.h`, permanent Power-On Self-Test (`post.h`, `post.cpp` to verify physical bus ACK, sensor `WHO_AM_I`, and power rails at boot), all feature modules (`<module>.h`, `<module>.cpp`), and the core functional logic in `<sketch>.ino` strictly adhering to the file breakdown and exact function/method signatures defined in `PLAN.md`.
+   - **Rules:** Use only APIs found in the user-provided docs (or verified in library headers). Apply defensive embedded programming: guard against `NULL` pointers, clamp inputs to boundary ranges, track initialization state (`is_initialized`), and use non-blocking timeouts with `millis()` rather than bare `while()` loops on hardware registers or communication buses. **Do not** create or modify test files (`test_config.h`, `test_harness.h`, `tests.h`, `tests.cpp`), **do not** run `arduino-cli compile`, and **do not** touch hardware.
+
+2. **Subagent 2 — Test Case Implementer:**
+   - **Inputs:** `PLAN.md`, `TESTS.md`, template harness files ([test_config.h](./resources/test_config.h), [test_harness.h](./resources/test_harness.h), [tests.h](./resources/tests.h), [tests.cpp](./resources/tests.cpp)), and relevant docs.
+   - **Scope (exclusive ownership of test files):** Copy `test_config.h`, `test_harness.h`, and `tests.h` into the sketch directory, configure `TEST_MAX_RECORDS` in `test_config.h` to accommodate all planned `T##` and `H##` tests, and implement `tests.cpp`.
+   - **Rules:** Implement every test ID listed in `TESTS.md` (including `T01` querying `post_get_result().all_passed` and all `NOM`, `BND`, `NEG`, `FLT`, `STA`, `TIM`, and `HUM` categories) calling the planned module interfaces/signatures specified in `PLAN.md` and reporting via the harness macros. **Do not** modify functional source files (`config.h`, `post.h/.cpp`, `<module>.h/.cpp`, `<sketch>.ino`), **do not** run `arduino-cli compile`, and **do not** touch hardware.
+
+3. **Subagent 3 — Integration, Verification & Compilation Agent (spawn ONLY after BOTH Subagent 1 and Subagent 2 finish):**
+   - **Inputs:** `PLAN.md`, `TESTS.md`, the resolved `<FQBN>[:options]` from Phase 2, and all files produced by Subagent 1 and Subagent 2.
+   - **Check & Integrate:**
+     - Verify that all modules and public APIs in `PLAN.md` are implemented and match the calls made in `tests.cpp`.
+     - Verify that every test ID in `TESTS.md` is reported in `tests.cpp` and that `#define TEST_MODE 1` and `TEST_MAX_RECORDS` are properly set in `test_config.h`.
+     - Ensure `<sketch>.ino` cleanly integrates both functional modules and test hooks: includes `post.h`, calls `Serial.begin(<BAUD>)`, executes `post_run()` and checks `post_handle_failure()` on failure in `setup()`, includes `test_config.h` / `tests.h` / `test_harness.h`, calls `run_all_tests()` once in `setup()` (guarded or no-op under `TEST_MODE`), and calls `TEST_SERVICE()` in `loop()`.
+     - Resolve any header include mismatches, symbol discrepancies, or missing definitions between functional code and test code.
+   - **Compile & Iterate:**
+     - Compile using `arduino-cli compile -b <FQBN>[:options] <sketch>`.
+     - If compilation fails, fix source/test integration errors and recompile iteratively (up to 10 consecutive attempts before stopping to ask the user; compile fixes do not count as test loops).
+     - Phase 3 is complete **only when the integrated sketch compiles with zero errors under `TEST_MODE`**. Do not upload or touch hardware.
+
+*(Fallback if subagents are unavailable in the host environment: execute the three steps sequentially inline—first functional source code, second test suite implementation, third integration check and compilation.)* Review the final result against `PLAN.md` and `TESTS.md`.
 
 ## Phase 4: Upload (user-assisted when needed)
 See [upload-and-ports.md](./references/upload-and-ports.md).

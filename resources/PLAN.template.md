@@ -4,6 +4,7 @@
 - **R1:** <Description of requirement 1>
 - **R2:** <Description of requirement 2>
 - ...
+- **POST Strategy (User-Selected):** <Enabled (default) | Disabled per user request | Custom approach: e.g. non-blocking degraded mode, specific fault indicators>
 
 ## 2. Docs Consulted (<docs_folder>)
 - `<doc_file>`: Provided board specifications (pinout, clock, peripheral mappings).
@@ -27,6 +28,8 @@
 <sketch_folder>/
 ├── <sketch_folder>.ino      # Main sketch: setup(), loop(), module initialization
 ├── config.h                 # Hardware pin definitions, constants, peripheral configs
+├── post.h                   # Permanent Power-On Self-Test (POST) declarations
+├── post.cpp                 # Permanent production hardware health checks (buses, IDs, rails)
 ├── <module1>.h              # Header for module 1 (interface / class declarations)
 ├── <module1>.cpp            # Implementation of module 1
 ├── <module2>.h              # Header for module 2
@@ -38,16 +41,19 @@
 └── logs/                    # Serial run logs and test results (run<N>.log, run<N>.json)
 ```
 
-## 5. Source File Breakdown & Responsibilities
+## 5. Source File Breakdown & Responsibilities (API Contract)
 
-| File | Purpose & Responsibilities | Key Functions / Classes | Dependencies |
-|---|---|---|---|
-| `<sketch>.ino` | Entry point. Coordinates setup(), main loop, task dispatching, and serial test dump service (`TEST_SERVICE()`). | `setup()`, `loop()` | All modules, `test_harness.h` |
-| `config.h` | Central pin mappings, timing constants, hardware configurations. | Macros / constexpr constants | None |
-| `<module1>.h/.cpp` | Encapsulates peripheral/feature 1 (e.g., sensor reading, display rendering). | `module1_init()`, `module1_read()`, ... | `config.h`, `<vendor_lib>` |
-| `test_config.h` | Master `#define TEST_MODE 1` switch and RAM allocation tuning. | Macro switches | Standard headers |
-| `test_harness.h` | In-memory test store singleton and serial result formatting. | `_t_store()`, `TEST_DUMP()`, `TEST_SERVICE()` | Standard Arduino |
-| `tests.h/.cpp` | Self-tests executed once at boot in `setup()` under `TEST_MODE`. | `run_all_tests()`, test cases for `T##` | `test_harness.h`, `<modules>` |
+<!-- NOTE: Specify exact function signatures and return types below so Subagent 1 (Functional Code) and Subagent 2 (Test Cases) implement against the exact same API contract in parallel. -->
+
+| File | Owner | Purpose & Responsibilities | Exact Public APIs / Signatures | Dependencies |
+|---|---|---|---|---|
+| `<sketch>.ino` | Subagent 1 & 3 | Entry point. Coordinates `setup()`, `loop()`, hardware POST, and test dump hooks (`run_all_tests()`, `TEST_SERVICE()`). | `void setup()`, `void loop()` | All modules, `post.h`, `tests.h`, `test_harness.h` |
+| `config.h` | Subagent 1 | Central pin mappings, timing constants, hardware configurations. | Macros / `constexpr` constants | None |
+| `post.h/.cpp` | Subagent 1 | **Permanent Power-On Self-Test (POST)**. Verifies physical bus integrity, device presence, `WHO_AM_I` registers, and rails at boot in `setup()`. Remains in production firmware. | `PostResult post_run()`, `const PostResult& post_get_result()`, `void post_handle_failure(...)` | `config.h`, `<vendor_lib>` |
+| `<module1>.h/.cpp` | Subagent 1 | Encapsulates peripheral/feature 1 (e.g., sensor reading, display rendering). | `bool module1_init()`, `int module1_read(int* out)`, ... | `config.h`, `<vendor_lib>` |
+| `test_config.h` | Subagent 2 | Master `#define TEST_MODE 1` switch and RAM allocation tuning (`TEST_MAX_RECORDS`). | Macro switches | Standard headers |
+| `test_harness.h` | Subagent 2 | In-memory test store singleton and serial result formatting. | `_t_store()`, `TEST_DUMP()`, `TEST_SERVICE()`, `TEST_ASSERT_*` | Standard Arduino |
+| `tests.h/.cpp` | Subagent 2 | Self-tests executed once at boot in `setup()` under `TEST_MODE`. Verifies POST results and software requirements. | `void run_all_tests()` (reports all `T##` & `H##` IDs) | `test_harness.h`, `post.h`, `<modules>` |
 
 ## 6. Architecture & Data Flow Diagram
 
@@ -64,6 +70,7 @@ flowchart TD
     subgraph Firmware [Firmware Architecture]
         INO["<sketch>.ino<br/>setup() & loop()"]
         CONF["config.h<br/>Pins & Constants"]
+        POST["post.h / post.cpp<br/>Power-On Self-Test (Permanent)"]
         M1["Module 1<br/>(e.g. Sensors)"]
         M2["Module 2<br/>(e.g. Display / Logic)"]
         HARNESS["test_harness.h<br/>RAM Result Store"]
@@ -71,11 +78,15 @@ flowchart TD
     end
 
     INO --> CONF
+    INO -->|"Runs once at boot in setup()"| POST
     INO --> M1
     INO --> M2
+    POST -->|Probes bus & WHO_AM_I| P1
+    POST -->|Probes readiness| P2
     M1 --> P1
     M2 --> P2
 
+    TESTS -->|"Inspects POST result (T01)"| POST
     TESTS -->|Tests| M1
     TESTS -->|Tests| M2
     TESTS -->|Records results| HARNESS
@@ -87,6 +98,7 @@ flowchart TD
 ## 7. Test Strategy & Edge-Case Verification
 
 ### 7.1 Architecture & Control
+- **Production Hardware Health (POST):** Permanent Power-On Self-Test (`post.h`/`post.cpp`) runs once at boot in `setup()`. Probes buses, reads device ID / `WHO_AM_I` registers, and checks power rail sanity. Remains compiled in production firmware. *(Configured per user preference in Phase 1b: enabled, customized fault behavior, or omitted if explicitly disabled).*
 - **Test Mode Toggle:** Activated via `#define TEST_MODE 1` in `test_config.h`. Production builds disable `TEST_MODE` to strip all test code with zero overhead.
 - **Boot Execution:** Self-tests run once during `setup()`, storing structured records in static RAM (`TestRecord`).
 - **On-Demand Serial Dump:** `TEST_SERVICE()` listens in `loop()` for `'r'` character sent by `capture_serial.py --send r` and streams `[TEST]` records without unsolicited blocking prints.
@@ -95,40 +107,44 @@ flowchart TD
 ### 7.2 Multi-Category Test Matrix
 > [!IMPORTANT]
 > Basic happy-path tests are easy to pass and mask critical bugs. All requirements must include rigorous edge-case and failure-mode checks across the following categories:
-> 1. **Nominal (`NOM`):** Standard operational checks with typical valid parameters.
-> 2. **Boundary & Extremes (`BND`):** Min/max limits, zero values, integer overflow, buffer limits, string truncation.
-> 3. **Negative & Invalid Input (`NEG`):** `NULL` pointers, out-of-range parameters, invalid commands (graceful error return without crashing).
-> 4. **Fault Simulation & Resilience (`FLT`):** Communication timeouts, disconnected sensor / I2C NACK fallback, non-blocking execution (no infinite `while` loops).
-> 5. **State Machine Lifecycle (`STA`):** Re-initialization idempotency, uninitialized calls, state recovery.
-> 6. **Timing & Asynchrony (`TIM`):** Rapid pulse chatter, debounce boundaries, `millis()` wraparound safety.
-> 7. **Human Edge-Case Verification (`HUM`):** Display boundary rendering with maximum length strings, visual fault alert indicators on error.
+> 1. **Hardware Power-On Self-Test (`PST`):** Permanent production checks verifying physical bus integrity, device presence, `WHO_AM_I` / chip IDs, and power rails at boot.
+> 2. **Nominal (`NOM`):** Standard operational checks with typical valid parameters.
+> 3. **Boundary & Extremes (`BND`):** Min/max limits, zero values, integer overflow, buffer limits, string truncation.
+> 4. **Negative & Invalid Input (`NEG`):** `NULL` pointers, out-of-range parameters, invalid commands (graceful error return without crashing).
+> 5. **Fault Simulation & Resilience (`FLT`):** Communication timeouts, disconnected sensor / I2C NACK fallback, non-blocking execution (no infinite `while` loops).
+> 6. **State Machine Lifecycle (`STA`):** Re-initialization idempotency, uninitialized calls, state recovery.
+> 7. **Timing & Asynchrony (`TIM`):** Rapid pulse chatter, debounce boundaries, `millis()` wraparound safety.
+> 8. **Human Edge-Case Verification (`HUM`):** Display boundary rendering with maximum length strings, visual fault alert indicators on error.
 
 ### 7.3 Edge Case & Failure Mode Mapping
 | Failure Mode / Edge Case | Risk Level | Mitigation & Firmware Handling | Test ID | Type |
 |---|---|---|---|---|
-| Sensor / Peripheral Disconnect | High | Non-blocking timeout (`millis()`); returns error status without hanging | `T07` | auto |
-| Buffer Overrun on Long Input | High | Explicit length clamping (`BUF_SIZE - 1`) and null termination | `T04` | auto |
-| Out-of-Range Parameter / Sensor Glitch | Medium | Clamped to safe min/max bounds | `T02`, `T03` | auto |
-| NULL Pointer passed to API | High | Parameter validation at function entry returning error code | `T05` | auto |
-| Invalid Command / Enum | Medium | Rejection with error status; state preserved | `T06` | auto |
-| Double `begin()` or Early Call | Medium | Guarded by `is_initialized` state flags | `T08`, `T09` | auto |
-| Rapid Switch Chatter / Bouncing | Medium | Time-based debounce window rejects short pulses | `T10` | auto |
+| Hardware Disconnect / Dead at Boot | High | Power-On Self-Test (`post.h/.cpp`) in `setup()` checks bus ACK & `WHO_AM_I`; enters safe state | `T01` | auto |
+| Sensor / Peripheral Disconnect Mid-run | High | Non-blocking timeout (`millis()`); returns error status without hanging | `T08` | auto |
+| Buffer Overrun on Long Input | High | Explicit length clamping (`BUF_SIZE - 1`) and null termination | `T05` | auto |
+| Out-of-Range Parameter / Sensor Glitch | Medium | Clamped to safe min/max bounds | `T03`, `T04` | auto |
+| NULL Pointer passed to API | High | Parameter validation at function entry returning error code | `T06` | auto |
+| Invalid Command / Enum | Medium | Rejection with error status; state preserved | `T07` | auto |
+| Double `begin()` or Early Call | Medium | Guarded by `is_initialized` state flags | `T09`, `T10` | auto |
+| Rapid Switch Chatter / Bouncing | Medium | Time-based debounce window rejects short pulses | `T11` | auto |
 | Max String Length on Display | Medium | UI buffer truncation to prevent visual clipping or heap corruption | `H02` | human |
 
-## 8. Work Packages (Implementation Steps)
-1. **WP1: Project Setup & Harness Configuration**
-   - Copy `test_config.h`, `test_harness.h`, `tests.h`, `tests.cpp` into sketch directory.
-   - Configure memory bounds (`TEST_MAX_RECORDS`) and baud rate in `test_config.h`.
-2. **WP2: Core Hardware & Configuration Module**
-   - Implement `config.h` with pins mapped from documentation.
-3. **WP3: Feature Modules Implementation (Defensive Embedded Design)**
-   - Implement `<module1>.h/.cpp` and `<module2>.h/.cpp` using documented APIs.
-   - Apply defensive guards: NULL pointer checks, non-blocking timeouts with `millis()`, buffer bounds clamping.
-4. **WP4: Comprehensive Self-Test Implementation**
-   - Implement test cases in `tests.cpp` covering nominal checks, boundary limits, negative inputs, fault resilience, state transitions, and timing edge cases.
-5. **WP5: Main Sketch Integration & Compilation**
-   - Wire modules and harness into `<sketch>.ino`.
-   - Compile cleanly with `arduino-cli compile -b <FQBN>[:options] <sketch>`.
+## 8. Work Packages (3-Subagent Implementation Pipeline)
+1. **WP1 — Functional Firmware Implementation (Subagent 1, runs in parallel with WP2)**
+   - Implement `config.h` with pins and constants mapped strictly from board documentation.
+   - Implement permanent Power-On Self-Test (`post.h` and `post.cpp`) verifying physical hardware presence (I2C/SPI bus ACK, sensor `WHO_AM_I`, rail sanity).
+   - Implement feature modules (`<module1>.h/.cpp`, `<module2>.h/.cpp`) and core `<sketch>.ino` logic matching the exact API contract in Section 5.
+   - Apply defensive embedded design: `NULL` pointer guards, boundary clamping, initialization state flags, and non-blocking `millis()` timeouts.
+   - Do not modify test files (`test_config.h`, `test_harness.h`, `tests.h`, `tests.cpp`) or run compilation.
+2. **WP2 — Comprehensive Test Suite Implementation (Subagent 2, runs in parallel with WP1)**
+   - Copy `test_config.h`, `test_harness.h`, and `tests.h` into the sketch directory and size `TEST_MAX_RECORDS` in `test_config.h`.
+   - Implement all test cases (`T##` and `H##`) in `tests.cpp` against the Section 5 API signatures, including `T01` (asserting `post_get_result().all_passed == true`), nominal checks, boundary limits, negative inputs, fault resilience, state transitions, and timing edge cases.
+   - Do not modify functional source files or run compilation.
+3. **WP3 — Check, Integration & Compilation (Subagent 3, spawned after WP1 & WP2 complete)**
+   - Cross-check all implemented module signatures and test cases against `PLAN.md` and `TESTS.md`.
+   - Integrate permanent hardware POST execution (`post_run()`) and fault handling into `<sketch>.ino`'s `setup()`.
+   - Integrate test hooks (`run_all_tests()` in `setup()` and `TEST_SERVICE()` in `loop()`) and header includes into `<sketch>.ino`.
+   - Compile cleanly with `arduino-cli compile -b <FQBN>[:options] <sketch>` under `TEST_MODE`, resolving any integration or build errors until zero errors remain.
 
 ## 9. Risks, Assumptions & Open Questions
 - **Memory / RAM limits:** <Risk evaluation and mitigations>

@@ -15,9 +15,12 @@ The skill is completely **board-agnostic**: it makes no hardcoded assumptions ab
 ## Key Features
 
 - **Strictly Document-Driven**: Works with any arduino compatible boards, given the board specifications and library documentation.
+- **Interactive Requirement Brainstorming & Clarification**: Collaborates with the user to brainstorm ideas, validates feasibility against hardware/library docs, and asks clarifying questions iteratively until every requirement, edge case, and success criterion is crystal clear.
 - **Interactive Board & FQBN Search**: Automatically discovers board names, Platform IDs, and exact FQBNs using `arduino-cli board search <name>`.
 - **Comprehensive Plan for Human Review**: Generates detailed `PLAN.md` with full project directory trees, per-file API breakdowns, and Mermaid architecture diagrams before any code is written.
 - **Human-in-the-Loop Review Gate**: Halts at the end of planning for human review and approval before touching code.
+- **3-Subagent Implementation & Integration Pipeline**: Splits implementation across two parallel subagents (Subagent 1 for functional firmware modules, Subagent 2 for test cases) using `PLAN.md` as a strict API contract, followed by a third subagent that cross-checks, integrates, and compiles the build cleanly.
+- **Permanent Power-On Self-Test (POST)**: Consults the user during requirements analysis to configure POST (`post.h` & `post.cpp`), executing permanent hardware health checks once in `setup()` at boot to verify physical bus communication, sensor presence (`WHO_AM_I`), and power rail sanity, entering a safe degraded state if hardware is dead or disconnected.
 - **Firmware Built with Embedded Tests**: The firmware is built with self-tests embedded directly in the binary (`test_harness.h` & `tests.cpp`), executing automated checks (`T##`) at boot, storing structured records in static RAM, and dumping them on host request (`r`).
 - **Comprehensive Edge-Case & Boundary Testing**: Rejects simplistic happy-path testing in favor of thorough test specifications covering boundary limits, negative/invalid inputs, fault injection/timeouts, state machine recovery, and hardware resilience.
 - **Controlled via `TEST_MODE`**: The embedded test framework is controlled at the source level via `test_config.h` (`#define TEST_MODE 1`). For production builds, disabling `TEST_MODE` strips out all test code with zero flash or RAM overhead, without modifying board-specific compiler flags.
@@ -39,6 +42,8 @@ arduino-firmware-building/
 ├── resources/
 │   ├── PLAN.template.md     # Comprehensive architecture plan template for human review
 │   ├── TESTS.template.md    # Test specification template
+│   ├── post.h               # Permanent Power-On Self-Test (POST) declarations
+│   ├── post.cpp             # Permanent hardware health check template (buses, IDs, rails)
 │   ├── test_config.h        # Source-level TEST_MODE toggle and RAM config
 │   ├── test_harness.h       # C++11 board-agnostic test harness
 │   ├── tests.h              # Test suite declarations
